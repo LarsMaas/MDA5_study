@@ -1,0 +1,608 @@
+---
+title: "MDA5_ChEP_analysis"
+author: "Lars Maas"
+date: "2024-01-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file is used to analyse ChEP-MS data of WT mouse ESCs and MDA5 inducible mouse ESCs
+
+## Loading packages and data
+
+```{r load_packages}
+if(!require("BiocManager")) install.packages("BiocManager")
+if(!require("tidyverse")) install.packages("tidyverse")
+if(!require("ggVennDiagram")) install.packages("ggVennDiagram")
+if(!require("upSetR")) install.packages("UpSetR")
+# if(!require("DESeq2")) install.packages("DESeq2")
+# if(!require("devtools")) install.packages("devtools")
+# if(!require("scRNAtoolVis")) devtools::install_github("junjunlab/scRNAtoolVis")
+```
+
+```{r}
+library("BiocManager")
+library("tidyverse")
+library("pheatmap")
+library("ggfortify")
+library("ggVennDiagram")
+library("clusterProfiler")
+library("UpSetR")
+library("pheatmap")
+library("scRNAtoolVis")
+```
+
+```{r load_data}
+# Read the differential expression files for different time points. Also undo the fold change and p value log operations
+diff_0h <- read_tsv("Diff_OE_WT_0h.txt", comment="#") %>% mutate("Student's T-test p-value Mda5OE_0h_WT_0h" = 10^(-`-Log Student's T-test p-value Mda5OE_0h_WT_0h`), "Fold_change" = 2^`Student's T-test Difference Mda5OE_0h_WT_0h`)
+
+diff_8h <- read_tsv("Diff_OE_WT_8h.txt", comment="#") %>% mutate("Student's T-test p-value Mda5OE_8h_WT_8h" = 10^(-`-Log Student's T-test p-value Mda5OE_8h_WT_8h`), "Fold_change" = 2^`Student's T-test Difference Mda5OE_8h_WT_8h`)
+
+diff_24h <- read_tsv("Diff_OE_WT_24h.txt", comment="#") %>% mutate("Student's T-test p-value Mda5OE_24h_WT_24h" = 10^(-`-Log Student's T-test p-value Mda5OE_24h_WT_24h`), "Fold_change" = 2^`Student's T-test Difference Mda5OE_24h_WT_24h`)
+
+diff_48h <- read_tsv("Diff_OE_WT_48h.txt", comment="#") %>% mutate("Student's T-test p-value Mda5OE_48h_WT_48h" = 10^(-`-Log Student's T-test p-value Mda5OE_48h_WT_48h`), "Fold_change" = 2^`Student's T-test Difference Mda5OE_48h_WT_48h`)
+```
+
+```{r}
+# Read LFQ data
+log2_counts <- read_tsv("MDA5 LFQ log2.txt", comment="#") %>%
+  tidyr::unite("id_Gene_name", c("id", "Gene names"), remove=FALSE, na.rm=TRUE, sep="|")
+
+# Calculate the z scores
+transformed_counts <- log2_counts %>% mutate(across(1:16, function(x) scale(x)))
+
+# create right format for PCA
+t_counts <- transformed_counts %>%
+  select(1:16, "id_Gene_name") %>%
+  pivot_longer(cols= -"id_Gene_name") %>%
+  pivot_wider(names_from = "id_Gene_name", values_from = "value") %>%
+  as.data.frame()
+
+# Add gene names as row names
+rownames(t_counts) <- t_counts$name %>% {gsub("LFQ intensity ", "", .)} %>% {gsub("Mda5", "", .)}
+t_counts <- t_counts %>% select(-"name")
+
+# Perform a PCA
+pca_results <- prcomp(t_counts)
+autoplot(pca_results, label=TRUE)
+```
+
+```{r}
+# Create a heatmap using the LFQ z scores.
+heatmap(as.matrix(t_counts), scale = "col")
+```
+
+```{r}
+
+# creat a p-value  histogram
+hist1 <- c(diff_0h$`Student's T-test p-value Mda5OE_0h_WT_0h`,
+  diff_8h$`Student's T-test p-value Mda5OE_8h_WT_8h`,
+  diff_24h$`Student's T-test p-value Mda5OE_24h_WT_24h`,
+  diff_48h$`Student's T-test p-value Mda5OE_48h_WT_48h`) %>%
+  hist(breaks=seq(0, 1, 0.005),
+       xlab="p-value",
+       main="Histogram of p-values")
+
+q_cutoff <- 0.1
+
+# overlay a second p-value histogram containing only significant p-values
+hist2 <- c(diff_0h[diff_0h["Student's T-test q-value Mda5OE_0h_WT_0h"] < q_cutoff,]$`Student's T-test p-value Mda5OE_0h_WT_0h`,
+diff_8h[diff_8h["Student's T-test q-value Mda5OE_8h_WT_8h"] < q_cutoff,]$`Student's T-test p-value Mda5OE_8h_WT_8h`,
+diff_24h[diff_24h["Student's T-test q-value Mda5OE_24h_WT_24h"] < q_cutoff,]$`Student's T-test p-value Mda5OE_24h_WT_24h`,
+diff_48h[diff_48h["Student's T-test q-value Mda5OE_48h_WT_48h"] < q_cutoff,]$`Student's T-test p-value Mda5OE_48h_WT_48h`) %>%
+  hist(breaks=seq(0,1,0.005),
+       add=TRUE,
+       col="red")
+
+# total number of bins
+bin_nr <- length(hist1$counts)
+# the 25% last bins. These are expected to be random
+random_p_bins <- hist1$counts[ceiling(bin_nr/4*3):bin_nr]
+# the average of the random bins
+abline(h=mean(random_p_bins), col="blue")
+# The max of the random bins
+abline(h=max(random_p_bins), col="purple", lty=5)
+# The minimum of the random bins
+abline(h=min(random_p_bins), col="purple", lty=5)
+
+```
+
+```{r}
+# Create an upset plot using all samples
+
+# The indices of different columns in the loaded differential expression files
+#   23 = -log pval
+#   24 = p.adj
+#   26 = t score
+#   32 = pval
+#   30 = Gene Names
+#   31 = protein id
+
+# Use (-log) p value or adjusted p value as a cutoff
+statistic_col <- 32
+# The cutoff for the p value
+statistic_cut_off <- 0.05
+# The fold cutoff
+fold_cut <- log2(1.4) # Orignally 1 (fold change of 2) log2(2)=1
+# Use either fold change or log fold change
+fold_col <- 25 # 25 for log2 fold change or "Fold_change" for fold change
+# Use a column with unique rows
+id_col <- 31
+
+# Get significant changing proteins.
+upset_sets_input <- list(
+  "0H_up" = diff_0h[diff_0h[statistic_col] < statistic_cut_off & diff_0h[fold_col] > fold_cut, id_col][[1]],
+  
+  "0H_down" = diff_0h[diff_0h[statistic_col] < statistic_cut_off & diff_0h[fold_col] < -fold_cut, id_col][[1]],
+  
+  "8H_up" = diff_8h[diff_8h[statistic_col] < statistic_cut_off & diff_8h[fold_col] > fold_cut, id_col][[1]],
+  
+  "8H_down" = diff_8h[diff_8h[statistic_col] < statistic_cut_off & diff_8h[fold_col] < -fold_cut, id_col][[1]],
+  
+  "24H_up" = diff_24h[diff_24h[statistic_col] < statistic_cut_off & diff_24h[fold_col] > fold_cut, id_col][[1]],
+  
+  "24H_down" = diff_24h[diff_24h[statistic_col] < statistic_cut_off & diff_24h[fold_col] < -fold_cut, id_col][[1]],
+  
+  "48H_up" = diff_48h[diff_48h[statistic_col] < statistic_cut_off & diff_48h[fold_col] > fold_cut, id_col][[1]],
+  
+  "48H_down" = diff_48h[diff_48h[statistic_col] < statistic_cut_off & diff_48h[fold_col] < -fold_cut, id_col][[1]]
+)
+
+# Create the upset plot.
+upset_sets <- upset_sets_input %>%
+  UpSetR::fromList() %>%
+  upset(sets=c("48H_down", "48H_up", 
+               "24H_down", "24H_up", 
+               "8H_down", "8H_up", 
+               "0H_down", "0H_up"),
+        order.by = "freq", 
+        point.size = 3,
+        mainbar.y.label = "Overlap in differential binding",
+        sets.x.label = "Differentially bound proteins",
+        text.scale = c(1.3, 1.3, 1, 1.3, 1.1, 1.3),
+        keep.order = TRUE,
+        queries = list(
+          list(query=intersects, params=list("8H_up"),
+               active=TRUE, color="blue"),
+          list(query=intersects, params=list("8H_down"),
+               active=TRUE, color="blue"),
+          list(query=intersects, params=list("24H_up"),
+               active=TRUE, color="blue"),
+          list(query=intersects, params=list("24H_down"),
+               active=TRUE, color="blue"),
+          list(query=intersects, params=list("8H_up", "24H_up"),
+               active=TRUE, color="blue"),
+          list(query=intersects, params=list("8H_down", "24H_down"),
+               active=TRUE, color="blue")))
+        # empty.intersections = "on",
+        # mb.ratio = c(0.7, 0.3)
+  
+
+upset_sets
+
+# A second option to make an upset plot
+upset_sets_2 <- upset_sets_input %>%
+   Venn() %>% plot_upset(nintersects = 60)
+
+upset_sets_2
+#upset_sets_input %>% ggVennDiagram()
+```
+
+```{r}
+# Get gene names by set name
+# gene_ids2 <- lapply(c("8H_up/24H_up"), function(x) {
+#   filter(id_conversion_table, id %in% important_sets[important_sets$name %in% x,]$item[[1]])$id_gene_name
+#   })
+
+# Get the interesting sets from the upset plot
+important_sets <- upset_sets_2$plotlist[[2]]$data %>% 
+  arrange(desc(size))
+
+important_sets[c(3,4,7,9,24,26),"name"]
+
+
+# Get unique genes and make one column containing both the gene names and the id
+id_conversion_table <- diff_0h[,c(30, 31)] %>% 
+  merge(diff_0h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_8h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_8h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_24h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_24h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_48h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  merge(diff_48h[,c(30, 31)], by=c('Gene names', 'id')) %>%
+  distinct(`Gene names`, id) %>%
+  tidyr::unite("id_gene_name", 
+               c(id, `Gene names`), 
+               sep="|", 
+               remove=FALSE, 
+               na.rm = TRUE)
+
+id_conversion_table
+
+# gene_names <- id_conversion_table %>% 
+#   filter(id %in% important_sets[1:6,]$item) %>%
+#   {.$id_gene_name}
+```
+
+```{r}
+# Order of the saples in the heatmap
+heatmap_row_order <- c("WT_0h_rep1", "WT_0h_rep2",
+  "OE_0h_rep1", "OE_0h_rep2",
+  "WT_8h_rep1", "WT_8h_rep2",
+  "OE_8h_rep1", "OE_8h_rep2",
+  "WT_24h_rep1", "WT_24h_rep2",
+  "OE_24h_rep1", "OE_24h_rep2",
+  "WT_48h_rep1", "WT_48h_rep2",
+  "OE_48h_rep1", "OE_48h_rep2")
+
+clusters <- c(3,4,7,9,24,26)
+
+# Get genes in the selected clusters
+gene_names_heatmap <- lapply(clusters, function(x) {
+  filter(id_conversion_table, id %in% important_sets[x,]$item[[1]])$id_gene_name
+  })
+
+
+# create a heatmap with the different clusters
+t_counts[
+    order(match(rownames(t_counts), heatmap_row_order)),
+    unlist(gene_names_heatmap)] %>% 
+  t() %>% 
+  pheatmap(cluster_rows = FALSE, 
+           cluster_cols = FALSE,
+           show_rownames = FALSE,
+           scale = "row", 
+           gaps_row = sapply(gene_names_heatmap, length) %>% cumsum(),
+           #border_color = "grey",
+           color=hcl.colors(100, "Viridis"))
+
+
+#heatmap(as.matrix(t_counts))
+#gene_names
+
+# Add legend
+# different color scheme
+# separate by group
+# pick clusters
+
+```
+
+```{r}
+# GO analysis
+
+ontology = "ALL"
+  
+gene_names_go <- lapply(clusters, function(x) {
+  filter(id_conversion_table, id %in% important_sets[x,]$item[[1]])$`Gene names`
+  })
+
+gene_names_go[[1]]  %>% as.data.frame() %>% mutate(across(".", str_replace, ";.*", ""))
+
+go_8h_up <- enrichGO(gene = gene_names_go[[1]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+go_24h_up <- enrichGO(gene = gene_names_go[[2]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+go_8h_down <- enrichGO(gene = gene_names_go[[3]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+go_24h_down <- enrichGO(gene = gene_names_go[[4]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+go_8h_down_24h_down <- enrichGO(gene = gene_names_go[[5]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+go_8h_up_24h_up <- enrichGO(gene = gene_names_go[[6]],
+         OrgDb = "org.Mm.eg.db",
+         keyType = "SYMBOL",
+         ont = ontology)
+
+#for (x in c(1:length(gene_names_go))) {
+#  write_csv(gene_names_go[[x]] %>% as.data.frame() %>% mutate(across(".", str_replace, ";.*", "")), file = paste0("/Users/larsm/Desktop/gene_names_cut_0_4/diff_", x, ".txt"), col_names = F)
+#}
+```
+
+```{r}
+dotplot(go_8h_down_24h_down)
+dotplot(go_8h_up_24h_up)
+```
+
+```{r}
+#update.packages(ask=FALSE)
+# install.packages("devtools")
+# BiocManager::install("ComplexHeatmap")
+# devtools::install_github("junjunlab/scRNAtoolVis")
+
+library(scRNAtoolVis)          )
+```
+
+```{r}
+# Volcano plot alternative
+tibble(
+  p_val = diff_0h[[23]],
+  avg_log2FC = diff_0h[[25]],
+  p_val_adj = diff_0h[[24]],
+  cluster = rep("0H", nrow(diff_0h)),
+  gene = diff_0h$`Gene names`) %>%
+  # Add 8h samples data
+  add_row(p_val = diff_8h[[23]],
+          avg_log2FC = diff_8h[[25]],
+          p_val_adj = diff_8h[[24]],
+          cluster = rep("8H", nrow(diff_8h)),
+          gene = diff_8h$`Gene names`) %>%
+  # Add 24h samples data
+  add_row(p_val = diff_24h[[23]],
+          avg_log2FC = diff_24h[[25]],
+          p_val_adj = diff_24h[[24]],
+          cluster = rep("24H", nrow(diff_24h)),
+          gene = diff_24h$`Gene names`) %>%
+  # Add 48h samples data
+  add_row(p_val = diff_48h[[23]],
+          avg_log2FC = diff_48h[[25]],
+          p_val_adj = diff_48h[[24]],
+          cluster = rep("48H", nrow(diff_48h)),
+          gene = diff_48h$`Gene names`) %>%
+  
+  jjVolcano(
+    col.type = "adjustP",
+    base_size=12,
+    back.col = "grey82",
+    topGeneN = 5,
+    size = 3,
+    log2FC.cutoff = 1,
+    pvalue.cutoff = 1.301, # everything lower than this will be removed
+    adjustP.cutoff = 0.1,
+    cluster.order = c("0H", "8H", "24H", "48H")
+   # ,flip = T
+  )
+```
+
+```{r}
+devtools::install_url("https://cran.r-project.org/src/contrib/Archive/qlcMatrix/qlcMatrix_0.9.7.tar.gz")
+devtools::install_github("junjunlab/ClusterGVis")
+
+```
+
+```{r}
+# Used for unbiased clustering
+library(ClusterGVis)
+```
+
+```{r}
+cut_off_fold = log2(1.4)
+cut_off_p = 0.05
+
+
+comparison_file_names <- list.files(r"{C:\Users\larsm\OneDrive\School\Master_bioinformatics_and_systems_biology\research projects\minor internship\Marks lab RIMLS\project_MD5\Mda5 ChEP MS\Diff_ALL_actual}", full.names = T)
+
+# comparison_file_names <- comparison_file_names[!str_detect(comparison_file_names, "_WT")]
+
+# There is one file per comparison. Go through them all and filter by p value and fold change. Add them to one list
+comparison_dfs <- lapply(comparison_file_names, function(file_name) {
+  comparison_df <- read_tsv(file_name, comment="#") %>%
+    mutate("Student's T-test p-value" = 10^(-.[[23]])) %>%
+    rename("log2 fold change" = 25) %>%
+    filter(`Student's T-test p-value` < cut_off_p,
+           `log2 fold change` > cut_off_fold | `log2 fold change` < -cut_off_fold) %>%
+    tidyr::unite("id_Gene_name", c("id", "Gene names"), remove=FALSE, na.rm=TRUE, sep="|")
+  
+  return(comparison_df$id_Gene_name)
+  })
+```
+
+```{r}
+# Get LFQ values of all samples
+oe_log_data <- log2_counts %>%
+  as.data.frame() %>% 
+  select(1:16, id_Gene_name)
+
+row.names(oe_log_data) <- oe_log_data$id_Gene_name
+
+colnames(oe_log_data) <- colnames(oe_log_data) %>% {gsub("LFQ intensity ", "", .)} %>% {gsub("Mda5", "", .)}
+
+# Rearrange the dataframe
+oe_log_data <- oe_log_data %>% 
+  select(-id_Gene_name) %>%
+  relocate("WT_0h_rep1", "WT_0h_rep2",
+           "WT_8h_rep1", "WT_8h_rep2",
+           "WT_24h_rep1", "WT_24h_rep2",
+           "WT_48h_rep1", "WT_48h_rep2",
+           "OE_0h_rep1", "OE_0h_rep2",
+           "OE_8h_rep1", "OE_8h_rep2",
+           "OE_24h_rep1", "OE_24h_rep2",
+           "OE_48h_rep1", "OE_48h_rep2")
+
+# Look through all comparisons and get the unique proteins
+sig_proteins <- comparison_dfs %>% unlist() %>% unique()
+
+# subset the dataframe with LFQ values using the significant proteins
+diff_genes_counts <- oe_log_data[sig_proteins,]
+
+# For all OE samples, get the average LFQ value per duplicate
+diff_genes_avg_oe <- diff_genes_counts %>%
+  mutate(OE_0h_avg = rowMeans(tibble(OE_0h_rep1, OE_0h_rep2)),
+         OE_8h_avg = rowMeans(tibble(OE_8h_rep1, OE_8h_rep2)),
+         OE_24h_avg = rowMeans(tibble(OE_24h_rep1, OE_24h_rep2)),
+         OE_48h_avg = rowMeans(tibble(OE_48h_rep1, OE_48h_rep2))) %>%
+  select(contains("_avg"))
+
+# For all WT samples, get the average LFQ value per duplicate
+diff_genes_avg_wt <- diff_genes_counts %>%
+  mutate(WT_0h_avg = rowMeans(tibble(WT_0h_rep1, WT_0h_rep2)),
+         WT_8h_avg = rowMeans(tibble(WT_8h_rep1, WT_8h_rep2)),
+         WT_24h_avg = rowMeans(tibble(WT_24h_rep1, WT_24h_rep2)),
+         WT_48h_avg = rowMeans(tibble(WT_48h_rep1, WT_48h_rep2))) %>%
+  select(contains("_avg"))
+```
+
+```{r}
+# Cluster all samples
+ck <- clusterData(exp=diff_genes_counts,
+                  cluster.method="kmeans",
+                  cluster.num=6)
+
+
+pdf('/Users/larsm/Desktop/clusterplot_ck_sig_all.pdf', height = 10, width = 10)
+
+
+visCluster(object = ck,
+           plot.type = "line",
+           column_names_rot = 45)
+visCluster(object = ck,
+           plot.type = "both",
+           #add.box = T,
+           #add.line = F,
+           column_names_rot = 45,
+           show_row_dend = T,
+           cluster_columns = F,
+           add.box = T)
+```
+
+```{r}
+
+# Cluster OE data
+ck_sig <- clusterData(exp=diff_genes_avg_oe,
+                  cluster.method="kmeans",
+                  cluster.num=6)
+
+# make a copy of the clustered data
+ck_sig_wt <- ck_sig
+
+# Join the WT data and remove the OE data
+ck_sig_wt$wide.res <- ck_sig_wt$wide.res %>% left_join(diff_genes_avg_wt, by = "gene") %>%
+  select(!contains("OE_"))
+
+# The object also has a pivotted data frame which we recreate here using the wide.res data frame
+ck_sig_wt$long.res <- ck_sig_wt$wide.res %>% 
+  # Pivot the table
+  pivot_longer(cols = starts_with("WT_"), names_to = "cell_type", values_to = "norm_value") %>% 
+  # Left join the cluster names
+  left_join(unique(ck_sig$long.res[c("cluster", "cluster_name")]), by="cluster")
+
+
+# Where should the clustering figures be saved
+pdf('/Users/larsm/Desktop/clusterplot_ck_sig.pdf', height = 12, width = 12)
+
+# Add the heatmaps
+visCluster(object = ck_sig,
+           plot.type = "line",
+           column_names_rot = 45)
+visCluster(object = ck_sig,
+           plot.type = "both",
+           #add.box = T,
+           #add.line = F,
+           column_names_rot = 45,
+           show_row_dend = T,
+           cluster_columns = F,
+           add.box = T)
+
+visCluster(object = ck_sig_wt,
+           plot.type = "line",
+           column_names_rot = 45)
+visCluster(object = ck_sig_wt,
+           plot.type = "both",
+           #add.box = T,
+           #add.line = F,
+           column_names_rot = 45,
+           show_row_dend = T,
+           cluster_columns = F,
+           add.box = T)
+
+#?visCluster
+
+```
+
+```{r}
+# Get clustering data
+clustering_all <- ck$wide.res %>% 
+  left_join(log2_counts, by=c("gene"="id_Gene_name")) %>%
+  select("Gene names",
+         "Protein IDs",
+         "Protein names",
+         "cluster",
+         "LFQ intensity Mda5OE_0h_rep1",
+         "LFQ intensity Mda5OE_0h_rep2",
+         "LFQ intensity Mda5OE_8h_rep1",
+         "LFQ intensity Mda5OE_8h_rep2",
+         "LFQ intensity Mda5OE_24h_rep1",
+         "LFQ intensity Mda5OE_24h_rep2",
+         "LFQ intensity Mda5OE_48h_rep1",
+         "LFQ intensity Mda5OE_48h_rep2",
+         "LFQ intensity WT_0h_rep1",
+         "LFQ intensity WT_0h_rep2",
+         "LFQ intensity WT_8h_rep1",
+         "LFQ intensity WT_8h_rep2",
+         "LFQ intensity WT_24h_rep1",
+         "LFQ intensity WT_24h_rep2",
+         "LFQ intensity WT_48h_rep1",
+         "LFQ intensity WT_48h_rep2")
+
+clustering_oe <- ck_sig$wide.res %>% 
+  left_join(log2_counts, by=c("gene"="id_Gene_name")) %>%
+  select("Gene names",
+         "Protein IDs",
+         "Protein names",
+         "cluster",
+         "LFQ intensity Mda5OE_0h_rep1",
+         "LFQ intensity Mda5OE_0h_rep2",
+         "LFQ intensity Mda5OE_8h_rep1",
+         "LFQ intensity Mda5OE_8h_rep2",
+         "LFQ intensity Mda5OE_24h_rep1",
+         "LFQ intensity Mda5OE_24h_rep2",
+         "LFQ intensity Mda5OE_48h_rep1",
+         "LFQ intensity Mda5OE_48h_rep2",
+         "LFQ intensity WT_0h_rep1",
+         "LFQ intensity WT_0h_rep2",
+         "LFQ intensity WT_8h_rep1",
+         "LFQ intensity WT_8h_rep2",
+         "LFQ intensity WT_24h_rep1",
+         "LFQ intensity WT_24h_rep2",
+         "LFQ intensity WT_48h_rep1",
+         "LFQ intensity WT_48h_rep2")
+```
+
+```{r}
+# The all significant genes
+ck$wide.res
+
+# The OE only genes
+ck_sig$wide.res
+```
+
+```{r}
+library(openxlsx)
+#Make a workbook
+wb <- createWorkbook()
+#Add a sheet to the workbook
+addWorksheet(wb, "Clustering all")
+
+# Add the cluster data of the clustering using all samples
+writeDataTable(wb, sheet = "Clustering all", x = clustering_all,
+               tableStyle = "TableStyleMedium13",
+               startCol = 1, startRow = 1, colNames = TRUE)
+
+addWorksheet(wb, "Clustering OE only")
+
+# Add the cluster data of the clustering using only OE samples
+writeDataTable(wb, sheet = "Clustering OE only", x = clustering_oe,
+               tableStyle = "TableStyleMedium13",
+               startCol = 1, startRow = 1, colNames = TRUE)
+
+
+
+saveWorkbook(wb, "C://Users/larsm/Desktop/Clustering_result_chep.xlsx", overwrite = TRUE)
+```

@@ -1,0 +1,15 @@
+# Example samples file for paper "Chromatin accessibility established by Pou5f3, Sox19b and Nanog primes
+# genes for activity during zebrafish genome activation". For help with filling out this file:
+# https://vanheeringen-lab.github.io/seq2science/content/workflows/atac_seq.html#filling-out-the-samples-tsv
+# Make sure that you use tab as a delimiter
+sample	assembly	unused	descriptive_name	conditions
+43340_WT0h_1_ATAC	GRCm39	1	WT_0h_1	WT0h
+43169_WT0h_2_ATAC	GRCm39	2	WT_0h_2	WT0h
+43170_WT24h_1_ATAC	GRCm39	1	WT_24h_1	WT24h
+43171_WT24h_2_ATAC	GRCm39	2	WT_24h_2	WT24h
+43344_WT48h_1_ATAC	GRCm39	1	WT_48h_1	WT48h
+43172_OE0h_1_ATAC	GRCm39	1	OE_0h_1	OE0h
+43346_OE0h_2_ATAC	GRCm39	2	OE_0h_2	OE0h
+43173_OE24h_1_ATAC	GRCm39	1	OE_24h_1	OE24h
+43174_OE24h_2_ATAC	GRCm39	2	OE_24h_2	OE24h
+43349_OE48h_1_ATAC	GRCm39	1	OE_48h_1	OE48h
